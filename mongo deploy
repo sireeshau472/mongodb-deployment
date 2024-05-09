@@ -1,0 +1,170 @@
+Setting-up MongoDB Operator with helm charts:
+helm repo add mongodb https://mongodb.github.io/helm-charts
+
+helm install community-operator mongodb/community-operator -n [name space]
+Create MongoDB Community Operator ReplicaSet using CRD object and Kubernetes StatefulSets. See documentation for more details.
+
+Also see Supported features of MongoDB Community Operator.
+
+Create a file with any name(say mongodb.yaml) with below YAML content
+
+apiVersion: mongodbcommunity.mongodb.com/v1
+kind: MongoDBCommunity
+metadata:
+  name: mongodb
+spec:
+  members: 3
+  type: ReplicaSet
+  version: "4.2.6"
+  security:
+    authentication:
+      modes: ["SCRAM"]
+  users:
+    - name: adminuser
+      db: admin
+      passwordSecretRef: # a reference to the secret that will be used to generate the user's password
+        name: mongodb-adminuser-password
+      roles:
+        - name: readWrite
+          db: dev-db
+        - name: dbAdmin
+          db: dev-db
+        - name: readWrite
+          db: admin
+        - name: dbAdmin
+          db: admin
+        - name: clusterAdmin
+          db: admin
+        - name: userAdminAnyDatabase
+          db: admin
+      scramCredentialsSecretName: my-scram
+  additionalMongodConfig:
+    storage.wiredTiger.engineConfig.journalCompressor: zlib
+
+# the user credentials will be generated from this secret
+# once the credentials are generated, this secret is no longer required
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongodb-adminuser-password
+type: Opaque
+stringData:
+  password: m127AKWoRG
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: mongodb-svc
+    statefulset.kubernetes.io/pod-name: mongodb-0
+  name: mongodb-0
+  namespace: default
+spec:
+  ports:
+  - nodePort: 30001
+    port: 27017
+    protocol: TCP
+    targetPort: 27017
+  selector:
+    app: mongodb-svc
+    statefulset.kubernetes.io/pod-name: mongodb-0
+  type: NodePort
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: mongodb-svc
+    statefulset.kubernetes.io/pod-name: mongodb-1
+  name: mongodb-1
+  namespace: default
+spec:
+  ports:
+  - nodePort: 30002
+    port: 27017
+    protocol: TCP
+    targetPort: 27017
+  selector:
+    app: mongodb-svc
+    statefulset.kubernetes.io/pod-name: mongodb-1
+  type: NodePort
+---
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app: mongodb-svc
+    statefulset.kubernetes.io/pod-name: mongodb-2
+  name: mongodb-2
+  namespace: default
+spec:
+  ports:
+  - nodePort: 30003
+    port: 27017
+    protocol: TCP
+    targetPort: 27017
+  selector:
+    app: mongodb-svc
+    statefulset.kubernetes.io/pod-name: mongodb-2
+  type: NodePort
+Deploy mongodb using above mongodb.yaml file.
+
+kubectl create -f mongodb.yaml -n [name space]
+Deploy mongo-client to access and test mongodb pods.
+
+kubectl run mongo-client --image=mongo -n [namespace]
+
+Note: In the above screenshot we see mongodb-arb is showing 0/0 that is because it got scalled down. This arbitery pod helps in leader election but it won't store data. with out arbitery pod also Mongodb functions as usual.
+
+Testing mongodb internal connection.
+
+kubectl exec -it mongo-client -- bash -n [namespace]
+
+mongosh mongodb://mongodb-0.mongodb-svc.default.svc.cluster.local:27017,mongodb-1.mongodb-svc.default.svc.cluster.local:27017,mongodb-2.mongodb-svc.default.svc.cluster.local:27017/admin?replicaSet=mongodb -u adminuser -p m127AKWoRG
+
+mongodb [primary] dev-db> show dbs
+admin   252.00 KiB
+config  116.00 KiB
+local   436.00 KiB
+mongodb [primary] dev-db> use dev-db
+switched to db dev-db
+
+mongodb [primary] dev-db> db.books.insertMany([
+        {title: "MongoDB is NoSQL database"},
+        {title: "Binary JSON format"},
+        {title: "MongoDB open-source database"}
+])
+{
+  acknowledged: true,
+  insertedIds: {
+    '0': ObjectId("640c5aaca18688b3132bee67"),
+    '1': ObjectId("640c5aaca18688b3132bee68"),
+    '2': ObjectId("640c5aaca18688b3132bee69")
+  }
+}
+mongodb [primary] dev-db>  
+
+mongodb [primary] dev-db> show dbs
+admin   252.00 KiB
+config  148.00 KiB
+dev-db   40.00 KiB
+local   440.00 KiB
+accessing externally:
+
+mongodb://adminuser:m127AKWoRG@[public ip/DNS]:30001/admin?replicaSet=mongodb&directConnection=true
+
+mongodb://adminuser:m127AKWoRG@[public ip/DNS]:30002/admin?replicaSet=mongodb&directConnection=true
+
+mongodb://adminuser:m127AKWoRG@[public ip/DNS]:30003/admin?replicaSet=mongodb&directConnection=true
+
+mongodb [primary] dev-db> show dbs
+admin   252.00 KiB
+config  148.00 KiB
+dev-db   40.00 KiB
+local   440.00 KiB
+Creating and deleting collections in MongoDB:
+
+image.png
+
+image.png
